@@ -81,6 +81,10 @@ set -o noglob
 #     Type of systemd service to create, will default from the k3s exec command
 #     if not specified.
 #
+#   - INSTALL_K3S_MIRROR
+#     For Chinese users, set INSTALL_K3S_MIRROR=cn to use the mirror address to accelerate
+#     k3s binary file download, and the default mirror address is rancher-mirror.rancher.cn
+#
 #   - INSTALL_K3S_SELINUX_WARN
 #     If set to true will continue if k3s-selinux policy is not found.
 #
@@ -94,11 +98,16 @@ set -o noglob
 #   - INSTALL_K3S_CHANNEL
 #     Channel to use for fetching k3s download URL.
 #     Defaults to 'stable'.
+#
+#   - INSTALL_K3S_REGISTRIES
+#     Setup a custom Registry or Mirror
+#     Defaults to null.
 
 GITHUB_URL=https://github.com/k3s-io/k3s/releases
 GITHUB_PR_URL=""
 STORAGE_URL=https://k3s-ci-builds.s3.amazonaws.com
 DOWNLOADER=
+INSTALL_K3S_MIRROR_URL=${INSTALL_K3S_MIRROR_URL:-'rancher-mirror.rancher.cn'}
 
 # --- helper functions for logs ---
 info()
@@ -164,6 +173,23 @@ verify_k3s_url() {
             fatal "Only https:// URLs are supported for K3S_URL (have ${K3S_URL})"
             ;;
     esac
+}
+
+# --- Setup a custom Registry or Mirror
+setup_registry() {
+    REGISTRIES_FILE="/etc/rancher/k3s/registries.yaml"
+    if [ "${INSTALL_K3S_REGISTRIES}" -a ! -f "$REGISTRIES_FILE" ]; then
+        INSTALL_K3S_REGISTRIES=`echo ${INSTALL_K3S_REGISTRIES} | awk '{gsub(/,/," "); print $0}'`
+        $SUDO mkdir -p `dirname $REGISTRIES_FILE`
+        $SUDO cat >> $REGISTRIES_FILE <<EOF
+mirrors:
+  "docker.io":
+    endpoint:
+EOF
+        for registry in ${INSTALL_K3S_REGISTRIES}; do
+            echo "      - $registry" >> "$REGISTRIES_FILE"
+        done
+    fi
 }
 
 # --- define needed environment variables ---
@@ -269,7 +295,11 @@ setup_env() {
     fi
 
     # --- setup channel values
-    INSTALL_K3S_CHANNEL_URL=${INSTALL_K3S_CHANNEL_URL:-'https://update.k3s.io/v1-release/channels'}
+    if [ "${INSTALL_K3S_MIRROR}" = cn ]; then
+        INSTALL_K3S_CHANNEL_URL="${INSTALL_K3S_MIRROR_URL}/k3s/channels"
+    else
+        INSTALL_K3S_CHANNEL_URL=${INSTALL_K3S_CHANNEL_URL:-'https://update.k3s.io/v1-release/channels'}
+    fi
     INSTALL_K3S_CHANNEL=${INSTALL_K3S_CHANNEL:-'stable'}
 }
 
@@ -368,10 +398,18 @@ get_release_version() {
         version_url="${INSTALL_K3S_CHANNEL_URL}/${INSTALL_K3S_CHANNEL}"
         case $DOWNLOADER in
             curl)
-                VERSION_K3S=$(curl -w '%{url_effective}' -L -s -S ${version_url} -o /dev/null | sed -e 's|.*/||')
+                if [ "${INSTALL_K3S_MIRROR}" = cn ]; then
+                    VERSION_K3S=$(curl -s -S ${version_url})
+                else
+                    VERSION_K3S=$(curl -w '%{url_effective}' -L -s -S ${version_url} -o /dev/null | sed -e 's|.*/||')
+                fi
                 ;;
             wget)
-                VERSION_K3S=$(wget -SqO /dev/null ${version_url} 2>&1 | grep -i Location | sed -e 's|.*/||')
+                if [ "${INSTALL_K3S_MIRROR}" = cn ]; then
+                    VERSION_K3S=$(wget -qO - ${version_url})
+                else
+                    VERSION_K3S=$(wget -SqO /dev/null ${version_url} 2>&1 | grep -i Location | sed -e 's|.*/||')
+                fi
                 ;;
             *)
                 fatal "Incorrect downloader executable '$DOWNLOADER'"
@@ -448,8 +486,11 @@ download_hash() {
         curl -o ${TMP_ZIP} -H "Authorization: Bearer $GITHUB_TOKEN" -L ${GITHUB_PR_URL}
         unzip -p ${TMP_ZIP} k3s.sha256sum > ${TMP_HASH}
     else
-        if [ -n "${INSTALL_K3S_COMMIT}" ]; then
-            HASH_URL=${STORAGE_URL}/k3s${SUFFIX}-${INSTALL_K3S_COMMIT}.sha256sum
+	    if [ -n "${INSTALL_K3S_COMMIT}" ]; then
+	        HASH_URL=${STORAGE_URL}/k3s${SUFFIX}-${INSTALL_K3S_COMMIT}.sha256sum
+	    elif [ "${INSTALL_K3S_MIRROR}" = cn ]; then
+	        VERSION_K3S=$( echo ${VERSION_K3S} | sed 's/+/-/g' )
+	        HASH_URL=${INSTALL_K3S_MIRROR_URL}/k3s/${VERSION_K3S}/sha256sum-${ARCH}.txt
         else
             HASH_URL=${GITHUB_URL}/download/${VERSION_K3S}/sha256sum-${ARCH}.txt
         fi
@@ -515,6 +556,9 @@ download_binary() {
         return
     elif [ -n "${INSTALL_K3S_COMMIT}" ]; then
         BIN_URL=${STORAGE_URL}/k3s${SUFFIX}-${INSTALL_K3S_COMMIT}
+    elif [ "${INSTALL_K3S_MIRROR}" = cn ]; then
+        VERSION_K3S=$( echo ${VERSION_K3S} | sed 's/+/-/g' )
+        BIN_URL=${INSTALL_K3S_MIRROR_URL}/k3s/${VERSION_K3S}/k3s${SUFFIX}
     else
         BIN_URL=${GITHUB_URL}/download/${VERSION_K3S}/k3s${SUFFIX}
     fi
@@ -1008,9 +1052,9 @@ EOF
 
     $SUDO tee /etc/logrotate.d/${SYSTEM_NAME} >/dev/null << EOF
 ${LOG_FILE} {
-	missingok
-	notifempty
-	copytruncate
+    missingok
+    notifempty
+    copytruncate
 }
 EOF
 }
@@ -1116,4 +1160,3 @@ eval set -- $(escape "${INSTALL_K3S_EXEC}") $(quote "$@")
     create_service_file
     service_enable_and_start
 }
-
