@@ -49,9 +49,7 @@ func RunWithControllers(app *cli.Context, leaderControllers server.CustomControl
 }
 
 func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomControllers, controllers server.CustomControllers) error {
-	var (
-		err error
-	)
+	var err error
 	// Validate build env
 	cmds.MustValidateGolang()
 
@@ -169,6 +167,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	serverConfig.ControlConfig.DisableAPIServer = cfg.DisableAPIServer
 	serverConfig.ControlConfig.DisableScheduler = cfg.DisableScheduler
 	serverConfig.ControlConfig.DisableControllerManager = cfg.DisableControllerManager
+	serverConfig.ControlConfig.DisableAgent = cfg.DisableAgent
 	serverConfig.ControlConfig.EmbeddedRegistry = cfg.EmbeddedRegistry
 	serverConfig.ControlConfig.ClusterInit = cfg.ClusterInit
 	serverConfig.ControlConfig.EncryptSecrets = cfg.EncryptSecrets
@@ -212,6 +211,14 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 
 	if serverConfig.ControlConfig.DisableETCD && serverConfig.ControlConfig.JoinURL == "" {
 		return errors.New("invalid flag use; --server is required with --disable-etcd")
+	}
+
+	if serverConfig.ControlConfig.Datastore.Endpoint != "" && serverConfig.ControlConfig.DisableAPIServer {
+		return errors.New("invalid flag use; cannot use --disable-apiserver with --datastore-endpoint")
+	}
+
+	if serverConfig.ControlConfig.Datastore.Endpoint != "" && serverConfig.ControlConfig.DisableETCD {
+		return errors.New("invalid flag use; cannot use --disable-etcd with --datastore-endpoint")
 	}
 
 	if serverConfig.ControlConfig.DisableAPIServer {
