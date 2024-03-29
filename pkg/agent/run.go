@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	systemd "github.com/coreos/go-systemd/daemon"
+	systemd "github.com/coreos/go-systemd/v22/daemon"
 	"github.com/k3s-io/k3s/pkg/agent/config"
 	"github.com/k3s-io/k3s/pkg/agent/containerd"
 	"github.com/k3s-io/k3s/pkg/agent/flannel"
@@ -19,6 +19,7 @@ import (
 	"github.com/k3s-io/k3s/pkg/agent/proxy"
 	"github.com/k3s-io/k3s/pkg/agent/syssetup"
 	"github.com/k3s-io/k3s/pkg/agent/tunnel"
+	"github.com/k3s-io/k3s/pkg/certmonitor"
 	"github.com/k3s-io/k3s/pkg/cgroups"
 	"github.com/k3s-io/k3s/pkg/cli/cmds"
 	"github.com/k3s-io/k3s/pkg/clientaccess"
@@ -48,7 +49,7 @@ import (
 	app2 "k8s.io/kubernetes/cmd/kube-proxy/app"
 	kubeproxyconfig "k8s.io/kubernetes/pkg/proxy/apis/config"
 	utilsnet "k8s.io/utils/net"
-	utilpointer "k8s.io/utils/pointer"
+	utilsptr "k8s.io/utils/ptr"
 )
 
 func run(ctx context.Context, cfg cmds.Agent, proxy proxy.Proxy) error {
@@ -201,8 +202,8 @@ func run(ctx context.Context, cfg cmds.Agent, proxy proxy.Proxy) error {
 // When running rootless, we do not attempt to set conntrack sysctls - this behavior is copied from kubeadm.
 func getConntrackConfig(nodeConfig *daemonconfig.Node) (*kubeproxyconfig.KubeProxyConntrackConfiguration, error) {
 	ctConfig := &kubeproxyconfig.KubeProxyConntrackConfiguration{
-		MaxPerCore:            utilpointer.Int32Ptr(0),
-		Min:                   utilpointer.Int32Ptr(0),
+		MaxPerCore:            utilsptr.To(int32(0)),
+		Min:                   utilsptr.To(int32(0)),
 		TCPEstablishedTimeout: &metav1.Duration{},
 		TCPCloseWaitTimeout:   &metav1.Duration{},
 	}
@@ -263,6 +264,9 @@ func RunStandalone(ctx context.Context, cfg cmds.Agent) error {
 	}
 
 	if err := tunnelSetup(ctx, nodeConfig, cfg, proxy); err != nil {
+		return err
+	}
+	if err := certMonitorSetup(ctx, nodeConfig, cfg); err != nil {
 		return err
 	}
 
@@ -501,6 +505,10 @@ func setupTunnelAndRunAgent(ctx context.Context, nodeConfig *daemonconfig.Node, 
 	if err := tunnelSetup(ctx, nodeConfig, cfg, proxy); err != nil {
 		return err
 	}
+	if err := certMonitorSetup(ctx, nodeConfig, cfg); err != nil {
+		return err
+	}
+
 	if !agentRan {
 		return agent.Agent(ctx, nodeConfig, proxy)
 	}
@@ -538,6 +546,13 @@ func tunnelSetup(ctx context.Context, nodeConfig *daemonconfig.Node, cfg cmds.Ag
 		return nil
 	}
 	return tunnel.Setup(ctx, nodeConfig, proxy)
+}
+
+func certMonitorSetup(ctx context.Context, nodeConfig *daemonconfig.Node, cfg cmds.Agent) error {
+	if cfg.ClusterReset {
+		return nil
+	}
+	return certmonitor.Setup(ctx, nodeConfig, cfg.DataDir)
 }
 
 // getHostname returns the actual system hostname.
