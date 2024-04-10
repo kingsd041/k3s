@@ -1,6 +1,9 @@
 package util
 
 import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
 	"net/http"
 
 	"github.com/k3s-io/k3s/pkg/generated/clientset/versioned/scheme"
@@ -12,7 +15,17 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 )
 
-var ErrNotReady = errors.New("apiserver not ready")
+var ErrAPINotReady = errors.New("apiserver not ready")
+var ErrAPIDisabled = errors.New("apiserver disabled")
+
+// SendErrorWithID sends and logs a random error ID so that logs can be correlated
+// between the REST API (which does not provide any detailed error output, to avoid
+// information disclosure) and the server logs.
+func SendErrorWithID(err error, component string, resp http.ResponseWriter, req *http.Request, status ...int) {
+	errID, _ := rand.Int(rand.Reader, big.NewInt(99999))
+	logrus.Errorf("%s error ID %05d: %v", component, errID, err)
+	SendError(fmt.Errorf("%s error ID %05d", component, errID), resp, req, status...)
+}
 
 // SendError sends a properly formatted error response
 func SendError(err error, resp http.ResponseWriter, req *http.Request, status ...int) {
@@ -24,8 +37,8 @@ func SendError(err error, resp http.ResponseWriter, req *http.Request, status ..
 		code = http.StatusInternalServerError
 	}
 
-	// Don't log "apiserver not ready" errors, they are frequent during startup
-	if !errors.Is(err, ErrNotReady) {
+	// Don't log "apiserver not ready" or "apiserver disabled" errors, they are frequent during startup
+	if !errors.Is(err, ErrAPINotReady) && !errors.Is(err, ErrAPIDisabled) {
 		logrus.Errorf("Sending HTTP %d response to %s: %v", code, req.RemoteAddr, err)
 	}
 
