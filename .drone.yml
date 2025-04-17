@@ -10,26 +10,12 @@ trigger:
   event:
     exclude:
     - cron
+    - pull_request
 
 clone:
   retries: 3
 
 steps:
-- name: skipfiles
-  image: plugins/git
-  commands:
-  - export NAME=$(test $DRONE_BUILD_EVENT = pull_request && echo remotes/origin/${DRONE_COMMIT_BRANCH:-master} || echo ${DRONE_COMMIT_SHA}~)
-  - export DIFF=$(git --no-pager diff --name-only $NAME | grep -v -f .droneignore);
-  - if [ -z "$DIFF" ]; then
-        echo "All files in PR are on ignore list";
-        exit 78;
-    else
-        echo "Some files in PR are not ignored, $DIFF";
-    fi;
-  when:
-    event:
-    - pull_request
-
 - name: build
   image: rancher/dapper:v0.6.0
   secrets: [ AWS_SECRET_ACCESS_KEY-k3s-ci-uploader, AWS_ACCESS_KEY_ID-k3s-ci-uploader, unprivileged_github_token ]
@@ -43,14 +29,6 @@ steps:
   commands:
   - dapper ci
   - echo "${DRONE_TAG}-amd64" | sed -e 's/+/-/g' >.tags
-  volumes:
-  - name: docker
-    path: /var/run/docker.sock
-
-- name: validate-cross-compilation
-  image: rancher/dapper:v0.6.0
-  commands:
-  - dapper validate-cross-compilation
   volumes:
   - name: docker
     path: /var/run/docker.sock
@@ -102,6 +80,26 @@ steps:
     repo: "rancher/k3s"
     username:
       from_secret: docker_username
+    build_args_from_env:
+      - DRONE_TAG
+  when:
+    instance:
+    - drone-publish.k3s.io
+    ref:
+    - refs/head/master
+    - refs/tags/*
+    event:
+    - tag
+
+- name: ghcr-publish
+  image: plugins/docker
+  settings:
+    registry: ghcr.io
+    dockerfile: package/Dockerfile
+    username: "k3s-io"
+    password:
+      from_secret: github_token
+    repo: "ghcr.io/k3s-io/k3s"
     build_args_from_env:
       - DRONE_TAG
   when:
@@ -190,26 +188,12 @@ trigger:
   event:
     exclude:
     - cron
+    - pull_request
 
 clone:
   retries: 3
 
 steps:
-- name: skipfiles
-  image: plugins/git
-  commands:
-  - export NAME=$(test $DRONE_BUILD_EVENT = pull_request && echo remotes/origin/${DRONE_COMMIT_BRANCH:-master} || echo ${DRONE_COMMIT_SHA}~)
-  - export DIFF=$(git --no-pager diff --name-only $NAME | grep -v -f .droneignore);
-  - if [ -z "$DIFF" ]; then
-        echo "All files in PR are on ignore list";
-        exit 78;
-    else
-        echo "Some files in PR are not ignored, $DIFF";
-    fi;
-  when:
-    event:
-    - pull_request
-
 - name: build
   image: rancher/dapper:v0.6.0
   secrets: [ AWS_SECRET_ACCESS_KEY-k3s-ci-uploader, AWS_ACCESS_KEY_ID-k3s-ci-uploader ]
@@ -255,6 +239,26 @@ steps:
     repo: "rancher/k3s"
     username:
       from_secret: docker_username
+    build_args_from_env:
+      - DRONE_TAG
+  when:
+    instance:
+    - drone-publish.k3s.io
+    ref:
+    - refs/head/master
+    - refs/tags/*
+    event:
+    - tag
+
+- name: ghcr-publish
+  image: plugins/docker
+  settings:
+    registry: ghcr.io
+    dockerfile: package/Dockerfile
+    username: "k3s-io"
+    password:
+      from_secret: github_token
+    repo: "ghcr.io/k3s-io/k3s"
     build_args_from_env:
       - DRONE_TAG
   when:
@@ -382,6 +386,26 @@ steps:
     event:
     - tag
 
+- name: ghcr-publish
+  image: plugins/docker:linux-arm
+  settings:
+    registry: ghcr.io
+    dockerfile: package/Dockerfile
+    username: "k3s-io"
+    password:
+      from_secret: github_token
+    repo: "ghcr.io/k3s-io/k3s"
+    build_args_from_env:
+      - DRONE_TAG
+  when:
+    instance:
+    - drone-publish.k3s.io
+    ref:
+    - refs/head/master
+    - refs/tags/*
+    event:
+    - tag
+
 - name: test
   # Refer to comment for arm/build.
   image: rancher/dapper:v0.5.0
@@ -397,51 +421,6 @@ steps:
   - >
     docker run -i -e REPO -e TAG -e DRONE_TAG -e DRONE_BUILD_EVENT -e IMAGE_NAME -e AWS_SECRET_ACCESS_KEY -e AWS_ACCESS_KEY_ID -e SONOBUOY_VERSION -e ENABLE_REGISTRY
     -v /var/run/docker.sock:/var/run/docker.sock --privileged --network host -v /tmp:/tmp k3s:test-${DRONE_STAGE_ARCH}-${DRONE_COMMIT}
-  volumes:
-  - name: docker
-    path: /var/run/docker.sock
-
-volumes:
-- name: docker
-  host:
-    path: /var/run/docker.sock
-
----
-kind: pipeline
-name: validate_go_mods
-
-platform:
-  os: linux
-  arch: amd64
-
-trigger:
-  event:
-    exclude:
-    - cron
-
-steps:
-- name: skipfiles
-  image: plugins/git
-  commands:
-  - export NAME=$(test $DRONE_BUILD_EVENT = pull_request && echo remotes/origin/${DRONE_COMMIT_BRANCH:-master} || echo ${DRONE_COMMIT_SHA}~)
-  - export DIFF=$(git --no-pager diff --name-only $NAME | grep -v -f .droneignore);
-  - if [ -z "$DIFF" ]; then
-        echo "All files in PR are on ignore list";
-        exit 78;
-    else
-        echo "Some files in PR are not ignored, $DIFF";
-    fi;
-  when:
-    event:
-    - push
-    - pull_request
-
-- name: validate_go_mods
-  image: rancher/dapper:v0.6.0
-  commands:
-  - docker build --target test-mods -t k3s:mod -f Dockerfile.test .
-  - docker run -i k3s:mod
-
   volumes:
   - name: docker
     path: /var/run/docker.sock
@@ -593,10 +572,11 @@ steps:
     - pull_request
 
 - name: build-e2e-image
-  image: rancher/dapper:v0.6.0
+  image: docker:25.0.5
   commands:
     - DOCKER_BUILDKIT=1 docker build --target test-e2e -t test-e2e -f Dockerfile.test .
-    - SKIP_VALIDATE=true SKIP_AIRGAP=true GOCOVER=1 dapper ci
+    - apk add make git bash
+    - GOCOVER=1 make local
     - cp dist/artifacts/* /tmp/artifacts/
   volumes:
   - name: cache
@@ -604,7 +584,9 @@ steps:
   - name: docker
     path: /var/run/docker.sock
 
-- name: test-e2e
+- name: test-e2e-validatecluster
+  depends_on:
+    - build-e2e-image
   image: test-e2e
   pull: never
   resources:
@@ -616,29 +598,46 @@ steps:
   commands:
   - mkdir -p dist/artifacts
   - cp /tmp/artifacts/* dist/artifacts/
-  - docker stop registry && docker rm registry
   # Cleanup VMs that are older than 2h. Happens if a previous test panics or is canceled
   - tests/e2e/scripts/cleanup_vms.sh
-  - docker run -d -p 5000:5000 -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io --name registry registry:2
+  - tests/e2e/scripts/drone_registries.sh
   - |
     cd tests/e2e/validatecluster
-    vagrant destroy -f
+    ../scripts/cleanup_vms.sh 'validatecluster_([0-9]+)_(server|agent)'
     go test -v -timeout=45m ./validatecluster_test.go -ci -local
     cp ./coverage.out /tmp/artifacts/validate-coverage.out
+  volumes:
+  - name: libvirt
+    path: /var/run/libvirt/
+  - name: docker
+    path: /var/run/docker.sock
+  - name: cache
+    path: /tmp/artifacts
+
+- name: test-e2e-splitserver
+  depends_on:
+    - build-e2e-image
+  image: test-e2e
+  pull: never
+  resources:
+    cpu: 6000
+    memory: 10Gi
+  environment:
+    E2E_REGISTRY: 'true'
+    E2E_GOCOVER: 'true'
+  commands:
+  - mkdir -p dist/artifacts
+  - cp /tmp/artifacts/* dist/artifacts/
+  - tests/e2e/scripts/drone_registries.sh
   - |
-    cd ../secretsencryption
-    vagrant destroy -f
-    go test -v -timeout=30m ./secretsencryption_test.go -ci -local
-    cp ./coverage.out /tmp/artifacts/se-coverage.out
-  - |
-    cd ../splitserver
-    vagrant destroy -f
+    cd tests/e2e/splitserver
+    ../scripts/cleanup_vms.sh 'splitserver_([0-9]+)'
     go test -v -timeout=30m ./splitserver_test.go -ci -local
     cp ./coverage.out /tmp/artifacts/split-coverage.out
   - |
     if [ "$DRONE_BUILD_EVENT" = "pull_request" ]; then
       cd ../upgradecluster
-      vagrant destroy -f
+      ../scripts/cleanup_vms.sh 'upgradecluster_([0-9]+)_(server|agent)'
       # Convert release-1.XX branch to v1.XX channel
       if [ "$DRONE_BRANCH" = "master" ]; then
         UPGRADE_CHANNEL="latest"
@@ -652,7 +651,6 @@ steps:
       E2E_RELEASE_CHANNEL=$UPGRADE_CHANNEL go test -v -timeout=45m ./upgradecluster_test.go  -ci -local -ginkgo.v
       cp ./coverage.out /tmp/artifacts/upgrade-coverage.out
     fi
-  - docker stop registry && docker rm registry
   
   volumes:
   - name: libvirt
@@ -663,13 +661,15 @@ steps:
     path: /tmp/artifacts
 
 - name: upload to codecov
+  depends_on:
+    - test-e2e-validatecluster
+    - test-e2e-splitserver
   image: robertstettner/drone-codecov
   settings:
     token: 
       from_secret: codecov_token
     files:
       - /tmp/artifacts/validate-coverage.out
-      - /tmp/artifacts/se-coverage.out
       - /tmp/artifacts/split-coverage.out
       - /tmp/artifacts/upgrade-coverage.out
     flags: 

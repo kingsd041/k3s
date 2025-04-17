@@ -2,6 +2,7 @@ package cert
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,10 +22,10 @@ import (
 	"github.com/k3s-io/k3s/pkg/util/services"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/otiai10/copy"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 	certutil "github.com/rancher/dynamiclistener/cert"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 func commandSetup(app *cli.Context, cfg *cmds.Server, sc *server.Config) (string, error) {
@@ -45,7 +46,7 @@ func commandSetup(app *cli.Context, cfg *cmds.Server, sc *server.Config) (string
 		cfg.Token = string(bytes.TrimRight(tokenByte, "\n"))
 	}
 	sc.ControlConfig.Token = cfg.Token
-	sc.ControlConfig.Runtime = config.NewRuntime(nil)
+	sc.ControlConfig.Runtime = config.NewRuntime()
 
 	return dataDir, nil
 }
@@ -71,7 +72,7 @@ func check(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 
-	if len(cmds.ServicesList) == 0 {
+	if len(cmds.ServicesList.Value()) == 0 {
 		// detecting if the command is being run on an agent or server based on presence of the server data-dir
 		_, err := os.Stat(serverConfig.ControlConfig.DataDir)
 		if err != nil {
@@ -79,14 +80,14 @@ func check(app *cli.Context, cfg *cmds.Server) error {
 				return err
 			}
 			logrus.Infof("Agent detected, checking agent certificates")
-			cmds.ServicesList = services.Agent
+			cmds.ServicesList = *cli.NewStringSlice(services.Agent...)
 		} else {
 			logrus.Infof("Server detected, checking agent and server certificates")
-			cmds.ServicesList = services.All
+			cmds.ServicesList = *cli.NewStringSlice(services.All...)
 		}
 	}
 
-	fileMap, err := services.FilesForServices(serverConfig.ControlConfig, cmds.ServicesList)
+	fileMap, err := services.FilesForServices(serverConfig.ControlConfig, cmds.ServicesList.Value())
 	if err != nil {
 		return err
 	}
@@ -101,7 +102,11 @@ func check(app *cli.Context, cfg *cmds.Server) error {
 			for _, file := range files {
 				// ignore errors, as some files may not exist, or may not contain certs.
 				// Only check whatever exists and has certs.
-				certs, _ := certutil.CertsFromFile(file)
+				certs, err := certutil.CertsFromFile(file)
+				if err != nil {
+					logrus.Debugf(err.Error())
+					continue
+				}
 				for _, cert := range certs {
 					if now.Before(cert.NotBefore) {
 						logrus.Errorf("%s: certificate %s is not valid before %s", file, cert.Subject, cert.NotBefore.Format(time.RFC3339))
@@ -123,7 +128,11 @@ func check(app *cli.Context, cfg *cmds.Server) error {
 		fmt.Fprintf(w, "-----------\t-------\t------\t-------")
 		for _, files := range fileMap {
 			for _, file := range files {
-				certs, _ := certutil.CertsFromFile(file)
+				certs, err := certutil.CertsFromFile(file)
+				if err != nil {
+					logrus.Debugf(err.Error())
+					continue
+				}
 				for _, cert := range certs {
 					baseName := filepath.Base(file)
 					var status string
@@ -171,7 +180,7 @@ func rotate(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 
-	if len(cmds.ServicesList) == 0 {
+	if len(cmds.ServicesList.Value()) == 0 {
 		// detecting if the command is being run on an agent or server based on presence of the server data-dir
 		_, err := os.Stat(serverConfig.ControlConfig.DataDir)
 		if err != nil {
@@ -179,14 +188,14 @@ func rotate(app *cli.Context, cfg *cmds.Server) error {
 				return err
 			}
 			logrus.Infof("Agent detected, rotating agent certificates")
-			cmds.ServicesList = services.Agent
+			cmds.ServicesList = *cli.NewStringSlice(services.Agent...)
 		} else {
 			logrus.Infof("Server detected, rotating agent and server certificates")
-			cmds.ServicesList = services.All
+			cmds.ServicesList = *cli.NewStringSlice(services.All...)
 		}
 	}
 
-	fileMap, err := services.FilesForServices(serverConfig.ControlConfig, cmds.ServicesList)
+	fileMap, err := services.FilesForServices(serverConfig.ControlConfig, cmds.ServicesList.Value())
 	if err != nil {
 		return err
 	}
@@ -200,7 +209,7 @@ func rotate(app *cli.Context, cfg *cmds.Server) error {
 
 	// The dynamiclistener cache file can't be simply deleted, we need to create a trigger
 	// file to indicate that the cert needs to be regenerated on startup.
-	for _, service := range cmds.ServicesList {
+	for _, service := range cmds.ServicesList.Value() {
 		if service == version.Program+services.ProgramServer {
 			dynamicListenerRegenFilePath := filepath.Join(serverConfig.ControlConfig.DataDir, "tls", "dynamic-cert-regenerate")
 			if err := os.WriteFile(dynamicListenerRegenFilePath, []byte{}, 0600); err != nil {
@@ -256,7 +265,7 @@ func backupCertificates(serverDataDir, agentDataDir string, fileMap map[string][
 }
 
 func validateCertConfig() error {
-	for _, s := range cmds.ServicesList {
+	for _, s := range cmds.ServicesList.Value() {
 		if !services.IsValid(s) {
 			return errors.New("service " + s + " is not recognized")
 		}
@@ -286,7 +295,7 @@ func rotateCA(app *cli.Context, cfg *cmds.Server, sync *cmds.CertRotateCA) error
 
 	// Set up dummy server config for reading new bootstrap data from disk.
 	tmpServer := &config.Control{
-		Runtime: config.NewRuntime(nil),
+		Runtime: config.NewRuntime(),
 		DataDir: sync.CACertPath,
 	}
 	deps.CreateRuntimeCertFiles(tmpServer)
@@ -302,7 +311,7 @@ func rotateCA(app *cli.Context, cfg *cmds.Server, sync *cmds.CertRotateCA) error
 
 	url := fmt.Sprintf("/v1-%s/cert/cacerts?force=%t", version.Program, sync.Force)
 	if err = info.Put(url, buf.Bytes()); err != nil {
-		return errors.Wrap(err, "see server log for details")
+		return pkgerrors.WithMessage(err, "see server log for details")
 	}
 
 	fmt.Println("certificates saved to datastore")

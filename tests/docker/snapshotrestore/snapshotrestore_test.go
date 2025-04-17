@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k3s-io/k3s/tests"
+	"github.com/k3s-io/k3s/tests/docker"
 	tester "github.com/k3s-io/k3s/tests/docker"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/utils/set"
 )
 
-var k3sImage = flag.String("k3sImage", "rancher/systemd-node", "The image used to provision containers")
 var serverCount = flag.Int("serverCount", 3, "number of server nodes")
 var agentCount = flag.Int("agentCount", 1, "number of agent nodes")
 var ci = flag.Bool("ci", false, "running on CI")
@@ -30,15 +31,15 @@ var _ = Describe("Verify snapshots and cluster restores work", Ordered, func() {
 	Context("Setup Cluster", func() {
 		It("should provision servers and agents", func() {
 			var err error
-			config, err = tester.NewTestConfig(*k3sImage)
+			config, err = tester.NewTestConfig("rancher/systemd-node")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(config.ProvisionServers(*serverCount)).To(Succeed())
 			Expect(config.ProvisionAgents(*agentCount)).To(Succeed())
 			Eventually(func() error {
-				return tester.CheckDefaultDeployments(config.KubeconfigFile)
+				return tests.CheckDefaultDeployments(config.KubeconfigFile)
 			}, "60s", "5s").Should(Succeed())
 			Eventually(func() error {
-				return tester.NodesReady(config.KubeconfigFile, config.GetNodeNames())
+				return tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())
 			}, "40s", "5s").Should(Succeed())
 		})
 	})
@@ -135,12 +136,12 @@ var _ = Describe("Verify snapshots and cluster restores work", Ordered, func() {
 		It("Checks that all nodes and pods are ready", func() {
 			By("Fetching node status")
 			Eventually(func() error {
-				return tester.NodesReady(config.KubeconfigFile, config.GetNodeNames())
+				return tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())
 			}, "60s", "5s").Should(Succeed())
 
 			By("Fetching Pods status")
 			Eventually(func(g Gomega) {
-				pods, err := tester.ParsePods(config.KubeconfigFile)
+				pods, err := tests.ParsePods(config.KubeconfigFile)
 				g.Expect(err).NotTo(HaveOccurred())
 				for _, pod := range pods {
 					if strings.Contains(pod.Name, "helm-install") {
@@ -168,6 +169,9 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
+	if failed {
+		AddReportEntry("journald-logs", docker.TailJournalLogs(1000, append(config.Servers, config.Agents...)))
+	}
 	if *ci || (config != nil && !failed) {
 		Expect(config.Cleanup()).To(Succeed())
 	}

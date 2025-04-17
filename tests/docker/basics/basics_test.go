@@ -7,12 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k3s-io/k3s/tests"
+	"github.com/k3s-io/k3s/tests/docker"
 	tester "github.com/k3s-io/k3s/tests/docker"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var k3sImage = flag.String("k3sImage", "", "The image used to provision containers")
+var ci = flag.Bool("ci", false, "running on CI, forced cleanup")
 var config *tester.TestConfig
 
 func Test_DockerBasic(t *testing.T) {
@@ -31,10 +34,10 @@ var _ = Describe("Basic Tests", Ordered, func() {
 			Expect(config.ProvisionServers(1)).To(Succeed())
 			Expect(config.ProvisionAgents(1)).To(Succeed())
 			Eventually(func() error {
-				return tester.DeploymentsReady([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
-			}, "60s", "5s").Should(Succeed())
+				return tests.CheckDeployments([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
+			}, "180s", "5s").Should(Succeed())
 			Eventually(func() error {
-				return tester.NodesReady(config.KubeconfigFile, config.GetNodeNames())
+				return tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())
 			}, "40s", "5s").Should(Succeed())
 		})
 	})
@@ -46,7 +49,7 @@ var _ = Describe("Basic Tests", Ordered, func() {
 		})
 		It("should validate local storage volume", func() {
 			Eventually(func() (bool, error) {
-				return tester.PodReady("volume-test", "kube-system", config.KubeconfigFile)
+				return tests.PodReady("volume-test", "kube-system", config.KubeconfigFile)
 			}, "20s", "5s").Should(BeTrue())
 		})
 	})
@@ -73,8 +76,12 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
-	if config != nil && !failed {
-		config.Cleanup()
+	if failed {
+		AddReportEntry("describe", docker.DescribeNodesAndPods(config))
+		AddReportEntry("docker-logs", docker.TailDockerLogs(1000, append(config.Servers, config.Agents...)))
+	}
+	if config != nil && (*ci || !failed) {
+		Expect(config.Cleanup()).To(Succeed())
 	}
 })
 

@@ -5,12 +5,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/k3s-io/k3s/tests"
+	"github.com/k3s-io/k3s/tests/docker"
 	tester "github.com/k3s-io/k3s/tests/docker"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var k3sImage = flag.String("k3sImage", "", "The k3s image used to provision containers")
+var ci = flag.Bool("ci", false, "running on CI, forced cleanup")
 var config *tester.TestConfig
 
 func Test_DockerEtcd(t *testing.T) {
@@ -30,10 +33,10 @@ var _ = Describe("Etcd Tests", Ordered, func() {
 		It("should provision servers", func() {
 			Expect(config.ProvisionServers(3)).To(Succeed())
 			Eventually(func() error {
-				return tester.DeploymentsReady([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
-			}, "60s", "5s").Should(Succeed())
+				return tests.CheckDeployments([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
+			}, "120s", "5s").Should(Succeed())
 			Eventually(func() error {
-				return tester.NodesReady(config.KubeconfigFile, config.GetNodeNames())
+				return tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())
 			}, "60s", "5s").Should(Succeed())
 		})
 		It("should destroy the cluster", func() {
@@ -56,10 +59,10 @@ var _ = Describe("Etcd Tests", Ordered, func() {
 			Expect(config.ProvisionServers(5)).To(Succeed())
 			Expect(config.ProvisionAgents(1)).To(Succeed())
 			Eventually(func() error {
-				return tester.DeploymentsReady([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
+				return tests.CheckDeployments([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
 			}, "90s", "5s").Should(Succeed())
 			Eventually(func() error {
-				return tester.NodesReady(config.KubeconfigFile, config.GetNodeNames())
+				return tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())
 			}, "90s", "5s").Should(Succeed())
 		})
 	})
@@ -71,7 +74,11 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
-	if config != nil && !failed {
-		config.Cleanup()
+	if failed {
+		AddReportEntry("describe", docker.DescribeNodesAndPods(config))
+		AddReportEntry("docker-logs", docker.TailDockerLogs(1000, append(config.Servers, config.Agents...)))
+	}
+	if config != nil && (*ci || !failed) {
+		Expect(config.Cleanup()).To(Succeed())
 	}
 })

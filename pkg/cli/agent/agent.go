@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/gorilla/mux"
 	"github.com/k3s-io/k3s/pkg/agent"
@@ -19,11 +18,13 @@ import (
 	"github.com/k3s-io/k3s/pkg/profile"
 	"github.com/k3s-io/k3s/pkg/spegel"
 	"github.com/k3s-io/k3s/pkg/util"
+	"github.com/k3s-io/k3s/pkg/util/permissions"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/k3s-io/k3s/pkg/vpn"
+	pkgerrors "github.com/pkg/errors"
 	"github.com/rancher/wrangler/v3/pkg/signals"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 func Run(ctx *cli.Context) error {
@@ -45,8 +46,10 @@ func Run(ctx *cli.Context) error {
 		return err
 	}
 
-	if runtime.GOOS != "windows" && os.Getuid() != 0 && !cmds.AgentConfig.Rootless {
-		return fmt.Errorf("agent must be run as root, or with --rootless")
+	if !cmds.AgentConfig.Rootless {
+		if err := permissions.IsPrivileged(); err != nil {
+			return pkgerrors.WithMessage(err, "agent requires additional privilege if not run with --rootless")
+		}
 	}
 
 	if cmds.AgentConfig.TokenFile != "" {
@@ -69,7 +72,7 @@ func Run(ctx *cli.Context) error {
 		return fmt.Errorf("--server is required")
 	}
 
-	if cmds.AgentConfig.FlannelIface != "" && len(cmds.AgentConfig.NodeIP) == 0 {
+	if cmds.AgentConfig.FlannelIface != "" && len(cmds.AgentConfig.NodeIP.Value()) == 0 {
 		ip, err := util.GetIPFromInterface(cmds.AgentConfig.FlannelIface)
 		if err != nil {
 			return err
@@ -85,7 +88,7 @@ func Run(ctx *cli.Context) error {
 	}
 
 	cfg := cmds.AgentConfig
-	cfg.Debug = ctx.GlobalBool("debug")
+	cfg.Debug = ctx.Bool("debug")
 	cfg.DataDir = dataDir
 
 	contextCtx := signals.SetupSignalContext()
@@ -127,5 +130,10 @@ func Run(ctx *cli.Context) error {
 		return https.Start(ctx, nodeConfig, nil)
 	}
 
-	return agent.Run(contextCtx, cfg)
+	if err := agent.Run(contextCtx, cfg); err != nil {
+		return err
+	}
+
+	<-contextCtx.Done()
+	return contextCtx.Err()
 }
