@@ -176,15 +176,20 @@ func (s *serverBootstrapper) Get(ctx context.Context) ([]peer.AddrInfo, error) {
 	if nodeName == "" {
 		return nil, errors.New("node name not set")
 	}
+
 	nodes := s.controlConfig.Runtime.Core.Core().V1().Node()
-	labelSelector := labels.Set{P2pEnabledLabel: "true"}.String()
-	nodeList, err := nodes.List(metav1.ListOptions{LabelSelector: labelSelector})
+	if !nodes.Informer().HasSynced() {
+		return nil, errors.New("node cache informer not synced")
+	}
+
+	labelSelector := labels.Set{P2pEnabledLabel: "true"}.AsSelector()
+	nodeList, err := nodes.Cache().List(labelSelector)
 	if err != nil {
 		return nil, err
 	}
 
 	addrs := []peer.AddrInfo{}
-	for _, node := range nodeList.Items {
+	for _, node := range nodeList {
 		if node.Name == nodeName {
 			// don't return our own address
 			continue
@@ -209,7 +214,9 @@ type chainingBootstrapper struct {
 }
 
 // NewChainingBootstrapper returns a p2p bootstrapper that passes through to a list of bootstrappers.
-// Addressess are returned from all boostrappers that return successfully.
+// Addressess are returned from the first bootstrapper that returns successfully, to prevent infinite
+// recursion if this chains through an agentBootstrapper when the server URL is set to an external
+// loadbalancer that points back at this node.
 func NewChainingBootstrapper(bootstrappers ...routing.Bootstrapper) routing.Bootstrapper {
 	return &chainingBootstrapper{
 		bootstrappers: bootstrappers,
@@ -229,20 +236,16 @@ func (c *chainingBootstrapper) Run(ctx context.Context, id string) error {
 
 func (c *chainingBootstrapper) Get(ctx context.Context) ([]peer.AddrInfo, error) {
 	errs := merr.Errors{}
-	addrs := []peer.AddrInfo{}
 	for i := range c.bootstrappers {
 		b := c.bootstrappers[i]
 		as, err := b.Get(ctx)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			addrs = append(addrs, as...)
+			return as, nil
 		}
 	}
-	if len(addrs) == 0 {
-		return nil, merr.NewErrors(errs...)
-	}
-	return addrs, nil
+	return nil, merr.NewErrors(errs...)
 }
 
 func waitForDone(ctx context.Context) error {
