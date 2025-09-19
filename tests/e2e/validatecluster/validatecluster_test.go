@@ -58,7 +58,7 @@ var _ = Describe("Verify Create", Ordered, func() {
 		})
 
 		It("Checks node and pod status", func() {
-			fmt.Printf("\nFetching node status\n")
+			fmt.Printf("\nFetching Nodes status\n")
 			Eventually(func() error {
 				return tests.NodesReady(tc.KubeconfigFile, e2e.VagrantSlice(tc.AllNodes()))
 			}, "620s", "5s").Should(Succeed())
@@ -66,7 +66,7 @@ var _ = Describe("Verify Create", Ordered, func() {
 
 			fmt.Printf("\nFetching Pods status\n")
 			Eventually(func() error {
-				return tests.AllPodsUp(tc.KubeconfigFile)
+				return tests.AllPodsUp(tc.KubeconfigFile, "kube-system")
 			}, "620s", "5s").Should(Succeed())
 			e2e.DumpPods(tc.KubeconfigFile)
 		})
@@ -303,7 +303,7 @@ var _ = Describe("Verify Create", Ordered, func() {
 			}, "620s", "5s").Should(Succeed())
 
 			Eventually(func() error {
-				return tests.AllPodsUp(tc.KubeconfigFile)
+				return tests.AllPodsUp(tc.KubeconfigFile, "kube-system")
 			}, "620s", "5s").Should(Succeed())
 		})
 
