@@ -22,7 +22,7 @@ var ci = flag.Bool("ci", false, "running on CI")
 var local = flag.Bool("local", false, "deploy a locally built K3s binary")
 
 // Environment Variables Info:
-// E2E_RELEASE_VERSION=v1.23.1+k3s2 (default: latest commit from master)
+// E2E_RELEASE_VERSION=v1.23.1+k3s2 (default: latest commit from main)
 // E2E_REGISTRY: true/false (default: false)
 
 func Test_E2EEmbeddedMirror(t *testing.T) {
@@ -108,12 +108,15 @@ var _ = Describe("Verify Create", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		/* Disabled, ref: https://github.com/spegel-org/spegel/issues/1023
 		It("Should expose embedded registry metrics", func() {
 			grepCmd := fmt.Sprintf("kubectl get --raw /api/v1/nodes/%s/proxy/metrics | grep -F 'spegel_advertised_images{registry=\"docker.io\"}'", tc.Servers[0])
 			res, err := e2e.RunCommand(grepCmd)
 			fmt.Println(res)
 			Expect(err).NotTo(HaveOccurred())
 		})
+		*/
+
 		It("Should cleanup deployments", func() {
 			_, err := e2e.RunCommand("kubectl delete deployment my-webpage-1 my-webpage-2 my-webpage-3")
 			Expect(err).NotTo(HaveOccurred())
